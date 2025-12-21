@@ -23,7 +23,11 @@ if (EMSCRIPTEN)
 endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
-set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15)
+
+# Set deployment target (iOS is set separately in the iOS block below)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET 10.15)
+endif()
 
 # Use GNUInstallDirs to allow customisation
 # but set our own default data and bin dir
@@ -164,6 +168,38 @@ if(APPLE)
     find_library(QUARTZCORE_LIBRARY QuartzCore)
 endif()
 
+# iOS-specific configuration (after general APPLE checks)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    message(STATUS "Building for iOS/iPadOS")
+
+    # Set the iOS build flag for conditional logic
+    set(IOS_BUILD ON)
+
+    # iOS-specific settings
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "17.0" CACHE STRING "Minimum iOS version")
+    endif()
+
+    # Find iOS-specific frameworks
+    find_library(UIKIT_LIBRARY UIKit REQUIRED)
+    find_library(METAL_LIBRARY Metal REQUIRED)
+    find_library(METALKIT_LIBRARY MetalKit REQUIRED)
+    find_library(CORETEXT_LIBRARY CoreText REQUIRED)
+    find_library(AVFOUNDATION_LIBRARY AVFoundation)
+
+    # Bundle configuration for iOS app
+    set(MACOSX_BUNDLE_GUI_IDENTIFIER "org.openttd.openttd" CACHE STRING "Bundle ID")
+    set(MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}" CACHE STRING "")
+    set(MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}" CACHE STRING "")
+
+    # Disable SDL2/Allegro for iOS (we use native UIKit/Metal)
+    set(SDL2_FOUND OFF)
+    set(ALLEGRO_FOUND OFF)
+
+    message(STATUS "  iOS Deployment Target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    message(STATUS "  Bundle ID: ${MACOSX_BUNDLE_GUI_IDENTIFIER}")
+endif()
+
 if(NOT EMSCRIPTEN AND NOT OPTION_DEDICATED)
     find_package(OpenGL COMPONENTS OpenGL)
 endif()
@@ -196,11 +232,25 @@ if(APPLE)
     if(NOT AUDIOTOOLBOX_LIBRARY)
         message(FATAL_ERROR "AudioToolbox is required for this platform")
     endif()
-    if(NOT AUDIOUNIT_LIBRARY)
-        message(FATAL_ERROR "AudioUnit is required for this platform")
-    endif()
-    if(NOT COCOA_LIBRARY)
-        message(FATAL_ERROR "Cocoa is required for this platform")
+    if(IOS_BUILD)
+        # iOS-specific requirements
+        if(NOT UIKIT_LIBRARY)
+            message(FATAL_ERROR "UIKit is required for iOS")
+        endif()
+        if(NOT METAL_LIBRARY)
+            message(FATAL_ERROR "Metal is required for iOS")
+        endif()
+        if(NOT METALKIT_LIBRARY)
+            message(FATAL_ERROR "MetalKit is required for iOS")
+        endif()
+    else()
+        # macOS-specific requirements
+        if(NOT AUDIOUNIT_LIBRARY)
+            message(FATAL_ERROR "AudioUnit is required for this platform")
+        endif()
+        if(NOT COCOA_LIBRARY)
+            message(FATAL_ERROR "Cocoa is required for this platform")
+        endif()
     endif()
     if(NOT QUARTZCORE_LIBRARY)
         message(FATAL_ERROR "QuartzCore is required for this platform")
@@ -253,6 +303,84 @@ if(MSVC)
         set_property(TARGET openttd PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         set_property(TARGET openttd_test PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
      endif()
+endif()
+
+# iOS bundle configuration (must be after add_executable)
+if(IOS_BUILD)
+    # Allow setting development team via CMake variable (must be before set_target_properties)
+    # Usage: cmake -DIOS_DEVELOPMENT_TEAM="XXXXXXXXXX" ...
+    if(NOT DEFINED IOS_DEVELOPMENT_TEAM)
+        set(IOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple Development Team ID for iOS code signing")
+    endif()
+
+    # Define iOS resource files
+    set(IOS_RESOURCE_FILES
+        "${CMAKE_SOURCE_DIR}/os/ios/LaunchScreen.storyboard"
+    )
+
+    # Add resource files to the target
+    target_sources(openttd PRIVATE ${IOS_RESOURCE_FILES})
+
+    # Set the resource files to be copied into the app bundle's Resources folder
+    set_source_files_properties(${IOS_RESOURCE_FILES}
+        PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources
+    )
+
+    # Configure the app bundle
+    set_target_properties(openttd PROPERTIES
+        # Enable app bundle
+        MACOSX_BUNDLE TRUE
+
+        # Info.plist template
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/os/ios/Info.plist.in"
+
+        # Bundle identifier (can be overridden at build time)
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${MACOSX_BUNDLE_GUI_IDENTIFIER}"
+
+        # Target iPad only (2 = iPad, 1 = iPhone, 1,2 = Universal)
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "2"
+
+        # Minimum iOS version
+        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+
+        # Code signing configuration for local development
+        # Empty DEVELOPMENT_TEAM allows ad-hoc/unsigned local builds
+        # Set to your Team ID for device deployment: cmake -DIOS_DEVELOPMENT_TEAM="XXXXXXXXXX"
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${IOS_DEVELOPMENT_TEAM}"
+
+        # Entitlements file for capabilities
+        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/os/ios/openttd.entitlements"
+
+        # Product name
+        XCODE_ATTRIBUTE_PRODUCT_NAME "OpenTTD"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${MACOSX_BUNDLE_GUI_IDENTIFIER}"
+
+        # Asset catalog compiler options (for future app icon support)
+        XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+
+        # Disable bitcode (deprecated in Xcode 14+)
+        XCODE_ATTRIBUTE_ENABLE_BITCODE "NO"
+
+        # Swift version (even though we don't use Swift, Xcode may require this)
+        XCODE_ATTRIBUTE_SWIFT_VERSION "5.0"
+
+        # Generate dSYM for debugging
+        XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym"
+
+        # Install path for the app
+        XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)"
+        XCODE_ATTRIBUTE_SKIP_INSTALL "NO"
+    )
+
+    message(STATUS "iOS Bundle Configuration:")
+    message(STATUS "  Info.plist: ${CMAKE_SOURCE_DIR}/os/ios/Info.plist.in")
+    message(STATUS "  LaunchScreen: ${CMAKE_SOURCE_DIR}/os/ios/LaunchScreen.storyboard")
+    message(STATUS "  Entitlements: ${CMAKE_SOURCE_DIR}/os/ios/openttd.entitlements")
+    message(STATUS "  Bundle ID: ${MACOSX_BUNDLE_GUI_IDENTIFIER}")
+    message(STATUS "  Development Team: ${IOS_DEVELOPMENT_TEAM} (empty = ad-hoc signing)")
 endif()
 
 target_precompile_headers(openttd_lib
@@ -343,16 +471,36 @@ include(3rdparty/llvm/CheckAtomic)
 if(APPLE)
     link_package(Iconv TARGET Iconv::Iconv)
 
-    target_link_libraries(openttd_lib
-        ${AUDIOTOOLBOX_LIBRARY}
-        ${AUDIOUNIT_LIBRARY}
-        ${COCOA_LIBRARY}
-        ${QUARTZCORE_LIBRARY}
-    )
+    if(IOS_BUILD)
+        # iOS-specific libraries
+        target_link_libraries(openttd_lib
+            ${AUDIOTOOLBOX_LIBRARY}
+            ${QUARTZCORE_LIBRARY}
+            ${CORETEXT_LIBRARY}
+            ${UIKIT_LIBRARY}
+            ${METAL_LIBRARY}
+            ${METALKIT_LIBRARY}
+        )
+        if(AVFOUNDATION_LIBRARY)
+            target_link_libraries(openttd_lib ${AVFOUNDATION_LIBRARY})
+        endif()
 
-    add_definitions(
-        -DWITH_COCOA
-    )
+        add_definitions(
+            -DWITH_IOS
+        )
+    else()
+        # macOS-specific libraries
+        target_link_libraries(openttd_lib
+            ${AUDIOTOOLBOX_LIBRARY}
+            ${AUDIOUNIT_LIBRARY}
+            ${COCOA_LIBRARY}
+            ${QUARTZCORE_LIBRARY}
+        )
+
+        add_definitions(
+            -DWITH_COCOA
+        )
+    endif()
 endif()
 
 if(EMSCRIPTEN)

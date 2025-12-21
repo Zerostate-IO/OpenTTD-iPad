@@ -91,6 +91,27 @@ jobs:
     with:
       arch: ${{ matrix.arch }}
 
+  ios:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: Debug
+          build_type: Debug
+          extra-cmake-parameters: ""
+        - name: Release
+          build_type: Release
+          extra-cmake-parameters: -DOPTION_USE_ASSERTS=OFF
+
+    name: iOS (${{ matrix.name }})
+
+    uses: ./.github/workflows/ci-ios.yml
+    secrets: inherit
+
+    with:
+      build_type: ${{ matrix.build_type }}
+      extra-cmake-parameters: ${{ matrix.extra-cmake-parameters }}
+
   check_annotations:
     name: Check Annotations
     needs:
@@ -98,6 +119,7 @@ jobs:
     - linux
     - macos
     - windows
+    - ios
 
     if: always() && github.event_name == 'pull_request'
 

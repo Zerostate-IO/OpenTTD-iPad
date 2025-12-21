@@ -1,5 +1,11 @@
 include(GNUInstallDirs)
 
+# iOS builds through Xcode directly, skip install/package logic
+if(IOS_BUILD)
+    message(STATUS "iOS build - skipping install/package configuration (use Xcode to build and deploy)")
+    return()
+endif()
+
 # If requested, use FHS layout; otherwise fall back to a flat layout.
 if(OPTION_INSTALL_FHS)
     set(BINARY_DESTINATION_DIR "${CMAKE_INSTALL_BINDIR}")

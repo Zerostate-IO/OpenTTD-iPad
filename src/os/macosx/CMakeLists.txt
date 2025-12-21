@@ -1,3 +1,4 @@
+# macOS-specific platform files (exclude iOS which uses src/os/ios/)
 add_files(
     crashlog_osx.cpp
     font_osx.cpp
@@ -8,9 +9,9 @@ add_files(
     string_osx.cpp
     string_osx.h
     survey_osx.cpp
-    CONDITION APPLE
+    CONDITION APPLE AND NOT IOS_BUILD
 )
 
-if(APPLE)
+if(APPLE AND NOT IOS_BUILD)
     target_sources(openttd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/osx_main.cpp)
 endif()

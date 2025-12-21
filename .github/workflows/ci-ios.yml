@@ -1,0 +1,57 @@
+name: CI (iOS)
+
+on:
+  workflow_call:
+    inputs:
+      build_type:
+        required: true
+        type: string
+      extra-cmake-parameters:
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  ios:
+    name: CI
+
+    runs-on: macos-latest
+
+    steps:
+    - name: Setup Xcode version
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Install GCC problem matcher
+      uses: ammaraskar/gcc-problem-matcher@master
+
+    - name: Build
+      run: |
+        mkdir build
+        cd build
+
+        echo "::group::CMake"
+        cmake .. \
+          -G Xcode \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+          ${{ inputs.extra-cmake-parameters }} \
+          # EOF
+        echo "::endgroup::"
+
+        echo "::group::Build"
+        echo "Running on $(sysctl -n hw.logicalcpu) cores"
+        cmake --build . --config ${{ inputs.build_type }} -- -jobs $(sysctl -n hw.logicalcpu)
+        echo "::endgroup::"
+
+    # Note: iOS tests are skipped as they require either:
+    # - A physical iOS device (not available in CI)
+    # - iOS Simulator with proper app signing and deployment
+    # Build verification is sufficient for CI purposes
