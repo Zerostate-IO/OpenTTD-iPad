@@ -6,3 +6,17 @@ docs/gamedocs/*
 docs/source/*
 /out
 /vcpkg_installed
+
+# iOS development (optional - already covered by /build*)
+*.xcuserdata
+*.xcworkspace
+DerivedData/
+
+# Xcode user-specific files
+*.xcuserdatad
+*.moved-aside
+*.hmap
+*.ipa
+
+# CocoaPods
+Pods/
