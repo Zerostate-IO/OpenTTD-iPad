@@ -91,3 +91,12 @@ add_dependencies(basesets
         baseset_files
 )
 add_library(openttd::basesets ALIAS basesets)
+
+if(IOS_BUILD)
+    target_sources(openttd PRIVATE ${BASESET_BINARY_FILES})
+    set_source_files_properties(${BASESET_BINARY_FILES}
+            PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources/baseset
+            GENERATED TRUE
+    )
+endif()

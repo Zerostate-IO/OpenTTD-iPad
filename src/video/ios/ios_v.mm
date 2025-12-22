@@ -25,6 +25,10 @@
 #include "../../framerate_type.h"
 #include "../../window_func.h"
 #include "../../gfx_func.h"
+#include "../../thread.h"
+
+#include <thread>
+#include <chrono>
 
 #import <UIKit/UIKit.h>
 
@@ -87,13 +91,42 @@ void VideoDriver_iOS::MakeDirty(int left, int top, int width, int height)
 
 void VideoDriver_iOS::MainLoop()
 {
-	// Launch the iOS Run Loop
-	// Note: In a real implementation, we might need to handle this differently
-	// as UIApplicationMain blocks. OpenTTD expects to drive the loop.
-	// For this skeleton, we assume UIApplicationMain will be called here.
+	NSLog(@"VideoDriver_iOS::MainLoop started, is_game_threaded=%d", this->is_game_threaded);
 	
-	char *argv[] = { (char *)"openttd", nullptr };
-	UIApplicationMain(0, argv, nil, @"OTTD_iOSAppDelegate");
+	// Initialize timing for the draw loop
+	this->next_game_tick = std::chrono::steady_clock::now();
+	this->next_draw_tick = std::chrono::steady_clock::now();
+	
+	// Start the game thread (handles game logic independently)
+	this->StartGameThread();
+	NSLog(@"VideoDriver_iOS::MainLoop - game thread started");
+	
+	// Mark driver as ready for tick processing
+	this->ready_for_tick = true;
+	NSLog(@"VideoDriver_iOS::MainLoop - ready for tick, display link will drive Tick() on main thread");
+	
+	// On iOS, unlike macOS's [NSApp run], we don't have a blocking main run loop.
+	// The display link (CADisplayLink) fires on the main thread and drives Tick().
+	// This background thread just waits for the exit signal.
+	// This pattern ensures:
+	// 1. Game logic runs on game thread (via StartGameThread)
+	// 2. Drawing/UI runs on main thread (via display link calling Tick)
+	// 3. This thread just monitors for exit
+	@autoreleasepool {
+		NSLog(@"VideoDriver_iOS::MainLoop waiting for exit, _exit_game=%d", (int)_exit_game.load());
+		
+		while (!_exit_game.load()) {
+			// Sleep briefly to avoid busy-waiting
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+		
+		NSLog(@"VideoDriver_iOS::MainLoop exiting, _exit_game=%d", (int)_exit_game.load());
+	}
+	
+	// Mark as not ready and stop the game thread
+	this->ready_for_tick = false;
+	this->StopGameThread();
+	NSLog(@"VideoDriver_iOS::MainLoop - game thread stopped");
 }
 
 bool VideoDriver_iOS::ChangeResolution(int w, int h)
@@ -178,60 +211,129 @@ void VideoDriver_iOS::MainLoopReal()
 bool VideoDriver_iOS::MakeWindow(int width, int height)
 {
 	this->setup = true;
+	NSLog(@"VideoDriver_iOS::MakeWindow called with %dx%d", width, height);
 
-	// On iOS, we normally let the AppDelegate create the window,
-	// but here we might need to create the VC if we are early.
-	// Assuming iOSSetupApplication does the heavy lifting or we do it here.
+	// On iOS, the window is created by the SceneDelegate (ios_main.mm).
+	// We need to dispatch to main thread to create our view controller and integrate.
+	__block bool success = false;
+	__block VideoDriver_iOS *self = this;
 	
-	this->viewController = [ [ OTTD_iOSViewController alloc ] initWithDriver:this ];
+	dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 	
-	// Access the view to trigger loadView
-	UIView *v = this->viewController.view;
-	if ([v isKindOfClass:[OTTD_MetalView class]]) {
-		this->metalView = (OTTD_MetalView *)v;
-	}
-
-    // Setup DisplayLink
-    this->displayLink = [CADisplayLink displayLinkWithTarget:this->viewController selector:@selector(displayLinkFired:)];
-    
-    // Initial thermal state check
-    NSProcessInfoThermalState state = [[NSProcessInfo processInfo] thermalState];
-    if (state == NSProcessInfoThermalStateSerious || state == NSProcessInfoThermalStateCritical) {
-        if (@available(iOS 15.0, *)) {
-            this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
-        } else {
-            this->displayLink.preferredFramesPerSecond = 30;
-        }
-    } else {
-        if (@available(iOS 15.0, *)) {
-            this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
-        } else {
-            this->displayLink.preferredFramesPerSecond = 60;
-        }
-    }
-    
-    [this->displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    
-    // Observer for thermal state
-    [[NSNotificationCenter defaultCenter] addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
-        NSProcessInfoThermalState state = [[NSProcessInfo processInfo] thermalState];
-        if (state == NSProcessInfoThermalStateSerious || state == NSProcessInfoThermalStateCritical) {
-             if (@available(iOS 15.0, *)) {
-                this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
-            } else {
-                this->displayLink.preferredFramesPerSecond = 30;
-            }
-        } else {
-             if (@available(iOS 15.0, *)) {
-                this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
-            } else {
-                this->displayLink.preferredFramesPerSecond = 60;
-            }
-        }
-    }];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		@autoreleasepool {
+			NSLog(@"VideoDriver_iOS: Looking for existing window...");
+			// Get the existing window from the key window
+			UIWindow *existingWindow = nil;
+			NSLog(@"VideoDriver_iOS: Connected scenes count: %lu", (unsigned long)[UIApplication sharedApplication].connectedScenes.count);
+			for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+				NSLog(@"VideoDriver_iOS: Scene activation state: %ld", (long)scene.activationState);
+				if (scene.activationState == UISceneActivationStateForegroundActive ||
+				    scene.activationState == UISceneActivationStateForegroundInactive) {
+					NSLog(@"VideoDriver_iOS: Scene windows count: %lu", (unsigned long)scene.windows.count);
+					for (UIWindow *win in scene.windows) {
+						NSLog(@"VideoDriver_iOS: Window isKeyWindow: %d", win.isKeyWindow);
+						if (win.isKeyWindow) {
+							existingWindow = win;
+							break;
+						}
+					}
+					if (existingWindow) break;
+				}
+			}
+			
+			if (!existingWindow) {
+				NSLog(@"VideoDriver_iOS: No existing window found, trying first window from any scene");
+				// Try getting any window if key window not found yet
+				for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+					if (scene.windows.count > 0) {
+						existingWindow = scene.windows.firstObject;
+						NSLog(@"VideoDriver_iOS: Using first window from scene");
+						break;
+					}
+				}
+			}
+			
+			if (!existingWindow) {
+				NSLog(@"VideoDriver_iOS: Still no window found!");
+				dispatch_semaphore_signal(sem);
+				return;
+			}
+			
+			NSLog(@"VideoDriver_iOS: Got existing window: %@", existingWindow);
+			self->window = existingWindow;
+			
+			// Create our view controller
+			NSLog(@"VideoDriver_iOS: Creating view controller...");
+			self->viewController = [[OTTD_iOSViewController alloc] initWithDriver:self];
+			NSLog(@"VideoDriver_iOS: View controller created: %@", self->viewController);
+			
+			// Access the view to trigger loadView
+			NSLog(@"VideoDriver_iOS: Accessing view to trigger loadView...");
+			UIView *v = self->viewController.view;
+			NSLog(@"VideoDriver_iOS: View loaded: %@", v);
+			if ([v isKindOfClass:[OTTD_MetalView class]]) {
+				self->metalView = (OTTD_MetalView *)v;
+				NSLog(@"VideoDriver_iOS: Metal view set: %@", self->metalView);
+			} else {
+				NSLog(@"VideoDriver_iOS: View is NOT a MetalView! Class: %@", [v class]);
+			}
+			
+			// Replace the window's root view controller with ours
+			NSLog(@"VideoDriver_iOS: Setting root view controller...");
+			existingWindow.rootViewController = self->viewController;
+			[existingWindow makeKeyAndVisible];
+			NSLog(@"VideoDriver_iOS: Window made key and visible");
+			
+			// Setup DisplayLink on main thread
+			self->displayLink = [CADisplayLink displayLinkWithTarget:self->viewController selector:@selector(displayLinkFired:)];
+			
+			// Initial thermal state check
+			NSProcessInfoThermalState state = [[NSProcessInfo processInfo] thermalState];
+			if (state == NSProcessInfoThermalStateSerious || state == NSProcessInfoThermalStateCritical) {
+				if (@available(iOS 15.0, *)) {
+					self->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
+				} else {
+					self->displayLink.preferredFramesPerSecond = 30;
+				}
+			} else {
+				if (@available(iOS 15.0, *)) {
+					self->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+				} else {
+					self->displayLink.preferredFramesPerSecond = 60;
+				}
+			}
+			
+			[self->displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+			
+			// Observer for thermal state
+			[[NSNotificationCenter defaultCenter] addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification * _Nonnull note) {
+				NSProcessInfoThermalState thermalState = [[NSProcessInfo processInfo] thermalState];
+				if (thermalState == NSProcessInfoThermalStateSerious || thermalState == NSProcessInfoThermalStateCritical) {
+					if (@available(iOS 15.0, *)) {
+						self->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
+					} else {
+						self->displayLink.preferredFramesPerSecond = 30;
+					}
+				} else {
+					if (@available(iOS 15.0, *)) {
+						self->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+					} else {
+						self->displayLink.preferredFramesPerSecond = 60;
+					}
+				}
+			}];
+			
+			success = true;
+			dispatch_semaphore_signal(sem);
+		}
+	});
+	
+	// Wait for main thread to complete setup (with timeout)
+	dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 
 	this->setup = false;
-	return true;
+	return success;
 }
 
 Dimension VideoDriver_iOS::GetScreenSize() const
@@ -274,6 +376,7 @@ bool VideoDriver_iOS::PollEvent()
 
 void VideoDriver_iOS::GameSizeChanged()
 {
+	BlitterFactory::GetCurrentBlitter()->PostResize();
 	::GameSizeChanged();
 }
 
@@ -283,46 +386,71 @@ bool VideoDriver_iOS::AfterBlitterChange()
 	return true;
 }
 
-// Touch Handling Stubs
+// Touch Handling
+// The key insight from window.cpp HandleMouseEvents():
+// A click is detected when _left_button_down is true AND _left_button_clicked is false.
+// HandleMouseEvents() then sets _left_button_clicked = true to mark it as processed.
+// We should NOT set _left_button_clicked ourselves - that prevents the click from registering.
+
 void VideoDriver_iOS::HandleTouchBegan(float x, float y, int touch_id)
 {
-	_cursor.pos.x = static_cast<int>(x);
-	_cursor.pos.y = static_cast<int>(y);
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	_cursor.pos.x = static_cast<int>(x * scale);
+	_cursor.pos.y = static_cast<int>(y * scale);
 	_left_button_down = true;
-	_left_button_clicked = true;
+	// Don't set _left_button_clicked - HandleMouseEvents() detects the click
+	// when _left_button_down is true and _left_button_clicked is false
+	HandleMouseEvents();
 }
 
 void VideoDriver_iOS::HandleTouchMoved(float x, float y, int touch_id)
 {
-	_cursor.pos.x = static_cast<int>(x);
-	_cursor.pos.y = static_cast<int>(y);
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	_cursor.pos.x = static_cast<int>(x * scale);
+	_cursor.pos.y = static_cast<int>(y * scale);
+	HandleMouseEvents();
 }
 
 void VideoDriver_iOS::HandleTouchEnded(float x, float y, int touch_id)
 {
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	_cursor.pos.x = static_cast<int>(x * scale);
+	_cursor.pos.y = static_cast<int>(y * scale);
+	// Release the button - this allows a new click to be registered next time
 	_left_button_down = false;
+	_left_button_clicked = false;
+	HandleMouseEvents();
 }
 
 void VideoDriver_iOS::HandleTap(float x, float y)
 {
-    float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
-    _cursor.pos.x = static_cast<int>(x * scale);
-    _cursor.pos.y = static_cast<int>(y * scale);
-    _left_button_down = true;
-    _left_button_clicked = true;
-    HandleMouseEvents();
-    _left_button_down = false;
+	// Tap gesture - simulate a complete mouse click (down + up)
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	_cursor.pos.x = static_cast<int>(x * scale);
+	_cursor.pos.y = static_cast<int>(y * scale);
+	
+	// Mouse down - HandleMouseEvents detects _left_button_down && !_left_button_clicked
+	_left_button_down = true;
+	_left_button_clicked = false;
+	HandleMouseEvents();
+	
+	// Mouse up
+	_left_button_down = false;
+	_left_button_clicked = false;
+	HandleMouseEvents();
 }
 
 void VideoDriver_iOS::HandleRightClick(float x, float y)
 {
-    float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
-    _cursor.pos.x = static_cast<int>(x * scale);
-    _cursor.pos.y = static_cast<int>(y * scale);
-    _right_button_down = true;
-    _right_button_clicked = true;
-    HandleMouseEvents();
-    _right_button_down = false;
+	// Right click uses _right_button_clicked differently - it's checked directly
+	// and cleared in HandleMouseEvents, so we DO set it to true here.
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	_cursor.pos.x = static_cast<int>(x * scale);
+	_cursor.pos.y = static_cast<int>(y * scale);
+	_right_button_down = true;
+	_right_button_clicked = true;
+	HandleMouseEvents();
+	_right_button_down = false;
 }
 
 void VideoDriver_iOS::HandlePan(float dx, float dy)
@@ -363,18 +491,29 @@ VideoDriver_iOSMetal::VideoDriver_iOSMetal()
 
 std::optional<std::string_view> VideoDriver_iOSMetal::Start(const StringList &param)
 {
+	NSLog(@"VideoDriver_iOSMetal::Start called");
 	auto err = this->Initialize();
-	if (err) return err;
+	if (err) {
+		NSLog(@"VideoDriver_iOSMetal::Start - Initialize failed: %s", err->data());
+		return err;
+	}
+	NSLog(@"VideoDriver_iOSMetal::Start - Initialize succeeded");
 
+	NSLog(@"VideoDriver_iOSMetal::Start - calling MakeWindow with %dx%d", _cur_resolution.width, _cur_resolution.height);
 	if (!this->MakeWindow(_cur_resolution.width, _cur_resolution.height)) {
+		NSLog(@"VideoDriver_iOSMetal::Start - MakeWindow failed!");
 		Stop();
 		return "Could not create window";
 	}
+	NSLog(@"VideoDriver_iOSMetal::Start - MakeWindow succeeded");
 
+	NSLog(@"VideoDriver_iOSMetal::Start - calling AllocateBackingStore");
 	this->AllocateBackingStore(true);
+	NSLog(@"VideoDriver_iOSMetal::Start - calling GameSizeChanged");
 	this->GameSizeChanged();
 
 	this->is_game_threaded = !GetDriverParamBool(param, "no_threads");
+	NSLog(@"VideoDriver_iOSMetal::Start completed successfully, is_game_threaded=%d", this->is_game_threaded);
 
 	return std::nullopt;
 }
@@ -384,23 +523,36 @@ void VideoDriver_iOSMetal::Stop()
 	this->VideoDriver_iOS::Stop();
 	this->window_buffer.reset();
 	this->pixel_buffer.reset();
+	this->anim_buffer.reset();
 }
 
 void VideoDriver_iOSMetal::AllocateBackingStore(bool force)
 {
-	if (this->metalView == nil || this->setup) return;
+	NSLog(@"VideoDriver_iOSMetal::AllocateBackingStore called, force=%d, metalView=%p, setup=%d",
+		  force, this->metalView, this->setup);
+	
+	if (this->metalView == nil || this->setup) {
+		NSLog(@"VideoDriver_iOSMetal::AllocateBackingStore - returning early!");
+		return;
+	}
 
 	this->UpdatePalette(0, 256);
 
-	// Get size from Metal view
 	CGSize size = this->metalView.drawableSize;
 	this->window_width = (int)size.width;
 	this->window_height = (int)size.height;
 	this->window_pitch = Align(this->window_width, 16 / sizeof(uint32_t));
 	this->buffer_depth = BlitterFactory::GetCurrentBlitter()->GetScreenDepth();
 
-	// Allocate buffer
-	this->window_buffer = std::make_unique<uint32_t[]>(this->window_pitch * this->window_height);
+	NSLog(@"VideoDriver_iOSMetal::AllocateBackingStore - size=%dx%d, pitch=%d, depth=%d",
+		  this->window_width, this->window_height, this->window_pitch, this->buffer_depth);
+
+	size_t buffer_size = (size_t)this->window_pitch * this->window_height;
+	this->window_buffer = std::make_unique<uint32_t[]>(buffer_size);
+	this->anim_buffer = std::make_unique<uint8_t[]>(buffer_size);
+	
+	NSLog(@"VideoDriver_iOSMetal::AllocateBackingStore - buffers allocated: window_buffer=%p, anim_buffer=%p, size=%zu",
+		  this->window_buffer.get(), this->anim_buffer.get(), buffer_size);
 
 	if (this->buffer_depth == 8) {
 		this->pixel_buffer = std::make_unique<uint8_t[]>(this->window_width * this->window_height);
@@ -412,13 +564,26 @@ void VideoDriver_iOSMetal::AllocateBackingStore(bool force)
 	_screen.height  = this->window_height;
 	_screen.pitch   = this->buffer_depth == 8 ? this->window_width : this->window_pitch;
 	_screen.dst_ptr = this->GetVideoPointer();
+	
+	NSLog(@"VideoDriver_iOSMetal::AllocateBackingStore - _screen: %dx%d, pitch=%d, dst_ptr=%p",
+		  _screen.width, _screen.height, _screen.pitch, _screen.dst_ptr);
 
 	this->MakeDirty(0, 0, _screen.width, _screen.height);
 	this->GameSizeChanged();
+	
+	NSLog(@"VideoDriver_iOSMetal::AllocateBackingStore - completed");
 }
 
 void VideoDriver_iOSMetal::Paint()
 {
+	static int paintCount = 0;
+	paintCount++;
+	if (paintCount <= 10 || paintCount % 300 == 0) {
+		NSLog(@"VideoDriver_iOSMetal::Paint called, count=%d, metalView=%p, dirty_rect=(%d,%d,%d,%d)",
+			  paintCount, this->metalView, 
+			  this->dirty_rect.left, this->dirty_rect.top, 
+			  this->dirty_rect.right, this->dirty_rect.bottom);
+	}
 	if (this->metalView) {
 		[this->metalView draw];
 	}
@@ -464,26 +629,7 @@ void VideoDriver_iOSMetal::UpdatePalette(uint first_colour, uint num_colours)
 }
 
 
-// AppDelegate needed for UIApplicationMain
-@interface OTTD_iOSAppDelegate : UIResponder <UIApplicationDelegate>
-@property (strong, nonatomic) UIWindow *window;
-@end
-
-@implementation OTTD_iOSAppDelegate
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-	// If the VideoDriver created the Window, we might want to use it.
-	// Or we create it here.
-	
-	VideoDriver_iOS *drv = (VideoDriver_iOS *)VideoDriver::GetInstance();
-	if (drv && drv->viewController) {
-		self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
-		self.window.rootViewController = drv->viewController;
-		[self.window makeKeyAndVisible];
-		drv->window = self.window;
-	}
-	
-	return YES;
-}
-@end
+// Note: AppDelegate is defined in ios_main.mm (OTTDAppDelegate/OTTDSceneDelegate)
+// The video driver integrates with the existing app lifecycle via SetupWithExistingWindow()
 
 #endif /* TARGET_OS_IOS */

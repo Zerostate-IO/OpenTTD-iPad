@@ -33,19 +33,33 @@
 }
 
 - (void)displayLinkFired:(CADisplayLink *)link {
-    if (driver) {
+    // Display link fires on the main thread at vsync rate.
+    // This is the correct place to drive Tick() for iOS - ensures all
+    // drawing happens on the main thread where Metal/UIKit expects it.
+    // The game thread handles game logic separately via StartGameThread().
+    if (driver && driver->IsReadyForTick()) {
         driver->TickWrapper();
     }
 }
 
 - (void)loadView
 {
+	NSLog(@"OTTD_iOSViewController loadView called");
 	// Create Metal view
-	self.view = [ [ OTTD_MetalView alloc ] initWithFrame:UIScreen.mainScreen.bounds device:MTLCreateSystemDefaultDevice() driver:driver ];
+	id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+	NSLog(@"OTTD_iOSViewController: Metal device: %@", device);
+	if (!device) {
+		NSLog(@"OTTD_iOSViewController: ERROR - No Metal device available!");
+	}
+	CGRect bounds = UIScreen.mainScreen.bounds;
+	NSLog(@"OTTD_iOSViewController: Screen bounds: %@", NSStringFromCGRect(bounds));
+	self.view = [ [ OTTD_MetalView alloc ] initWithFrame:bounds device:device driver:driver ];
+	NSLog(@"OTTD_iOSViewController: Metal view created: %@", self.view);
 	
 	// Set the driver's Metal View pointer if needed or available
 	if (driver) {
 		driver->metalView = (OTTD_MetalView *)self.view;
+		NSLog(@"OTTD_iOSViewController: Set driver->metalView");
 	}
 }
 
@@ -57,15 +71,15 @@
 	self.view.multipleTouchEnabled = YES;
 }
 
-// Pass touch events to driver
+// Pass touch events to driver (for both finger and Apple Pencil)
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
+	NSLog(@"touchesBegan: count=%lu", (unsigned long)touches.count);
 	if (!driver) return;
 	for (UITouch *touch in touches) {
-        if (touch.type == UITouchTypePencil) {
-		    CGPoint loc = [ touch locationInView:self.view ];
-		    driver->HandleTouchBegan(loc.x, loc.y, (long)touch);
-        }
+		CGPoint loc = [ touch locationInView:self.view ];
+		NSLog(@"touchesBegan: loc=(%.1f, %.1f), scale=%.1f", loc.x, loc.y, self.view.contentScaleFactor);
+		driver->HandleTouchBegan(loc.x, loc.y, (long)touch);
 	}
 }
 
@@ -73,21 +87,19 @@
 {
 	if (!driver) return;
 	for (UITouch *touch in touches) {
-        if (touch.type == UITouchTypePencil) {
-		    CGPoint loc = [ touch locationInView:self.view ];
-		    driver->HandleTouchMoved(loc.x, loc.y, (long)touch);
-        }
+		CGPoint loc = [ touch locationInView:self.view ];
+		driver->HandleTouchMoved(loc.x, loc.y, (long)touch);
 	}
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
+	NSLog(@"touchesEnded: count=%lu", (unsigned long)touches.count);
 	if (!driver) return;
 	for (UITouch *touch in touches) {
-        if (touch.type == UITouchTypePencil) {
-		    CGPoint loc = [ touch locationInView:self.view ];
-		    driver->HandleTouchEnded(loc.x, loc.y, (long)touch);
-        }
+		CGPoint loc = [ touch locationInView:self.view ];
+		NSLog(@"touchesEnded: loc=(%.1f, %.1f)", loc.x, loc.y);
+		driver->HandleTouchEnded(loc.x, loc.y, (long)touch);
 	}
 }
 
@@ -214,13 +226,10 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 }
 
 - (void)setupGestureRecognizers {
-    // Single tap
-    UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] 
-        initWithTarget:self action:@selector(handleSingleTap:)];
-    singleTap.numberOfTapsRequired = 1;
-    singleTap.numberOfTouchesRequired = 1;
-    singleTap.delegate = self;
-    singleTap.cancelsTouchesInView = NO;
+    // NOTE: We do NOT use a single-tap gesture recognizer.
+    // Single-finger taps/clicks are handled via touchesBegan/touchesEnded on the view controller.
+    // This gives us the lowest latency and most reliable click detection.
+    // Gesture recognizers are used only for multi-touch and complex gestures.
 
     // Two-finger tap (right-click)
     UITapGestureRecognizer *twoFingerTap = [[UITapGestureRecognizer alloc]
@@ -237,41 +246,30 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     longPress.delegate = self;
     longPress.cancelsTouchesInView = NO;
 
-    // Pan (viewport scroll, single finger only)
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
-        initWithTarget:self action:@selector(handlePan:)];
-    pan.minimumNumberOfTouches = 1;
-    pan.maximumNumberOfTouches = 1;
-    pan.delegate = self;
-    pan.cancelsTouchesInView = NO;
-
-    // Pinch (zoom)
+    // Pinch (zoom) - two finger gesture
     UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc]
         initWithTarget:self action:@selector(handlePinch:)];
     pinch.delegate = self;
     pinch.cancelsTouchesInView = NO;
 
-    // DEPENDENCY CHAINS
-    [singleTap requireGestureRecognizerToFail:longPress];
-    [singleTap requireGestureRecognizerToFail:pan];
-    
-    [self addGestureRecognizer:singleTap];
+    // Two-finger pan for scrolling the viewport
+    UIPanGestureRecognizer *twoFingerPan = [[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(handleTwoFingerPan:)];
+    twoFingerPan.minimumNumberOfTouches = 2;
+    twoFingerPan.maximumNumberOfTouches = 2;
+    twoFingerPan.delegate = self;
+    twoFingerPan.cancelsTouchesInView = NO;
+
     [self addGestureRecognizer:twoFingerTap];
     [self addGestureRecognizer:longPress];
-    [self addGestureRecognizer:pan];
     [self addGestureRecognizer:pinch];
-}
-
-- (void)handleSingleTap:(UITapGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateEnded) {
-        CGPoint loc = [gesture locationInView:self];
-        if (driver) driver->HandleTap(loc.x, loc.y);
-    }
+    [self addGestureRecognizer:twoFingerPan];
 }
 
 - (void)handleTwoFingerTap:(UITapGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateEnded) {
         CGPoint loc = [gesture locationInView:self];
+        NSLog(@"handleTwoFingerTap: location=(%.1f, %.1f)", loc.x, loc.y);
         if (driver) driver->HandleRightClick(loc.x, loc.y);
     }
 }
@@ -283,11 +281,12 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
         [feedback impactOccurred];
         
         CGPoint loc = [gesture locationInView:self];
+        NSLog(@"handleLongPress: location=(%.1f, %.1f)", loc.x, loc.y);
         if (driver) driver->HandleRightClick(loc.x, loc.y);
     }
 }
 
-- (void)handlePan:(UIPanGestureRecognizer *)gesture {
+- (void)handleTwoFingerPan:(UIPanGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateChanged) {
         CGPoint translation = [gesture translationInView:self];
         if (driver) driver->HandlePan(translation.x, translation.y);
@@ -322,17 +321,32 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 }
 
 - (void)drawInMTKView:(MTKView *)view {
-    if (!driver) return;
+    static int drawCount = 0;
+    drawCount++;
+    
+    if (!driver) {
+        if (drawCount <= 5) NSLog(@"OTTD_MetalView drawInMTKView: no driver!");
+        return;
+    }
     
     void *buffer = driver->GetDisplayBuffer();
-    if (!buffer) return;
+    if (!buffer) {
+        if (drawCount <= 5) NSLog(@"OTTD_MetalView drawInMTKView: no buffer!");
+        return;
+    }
 
     // Metal textures must be at least 1x1
     CGSize drawableSize = view.drawableSize;
     NSUInteger width = (NSUInteger)MAX(drawableSize.width, 1);
     NSUInteger height = (NSUInteger)MAX(drawableSize.height, 1);
 
+    if (drawCount <= 5 || drawCount % 300 == 0) {
+        NSLog(@"OTTD_MetalView drawInMTKView: count=%d, size=%lux%lu, buffer=%p", 
+              drawCount, (unsigned long)width, (unsigned long)height, buffer);
+    }
+
     if (!_gameTexture || _gameTexture.width != width || _gameTexture.height != height) {
+        NSLog(@"OTTD_MetalView drawInMTKView: creating texture %lux%lu", (unsigned long)width, (unsigned long)height);
         MTLTextureDescriptor *textureDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                              width:width
                                                                                             height:height
@@ -341,7 +355,7 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     }
 
     // Get the pitch from the driver (already aligned)
-    NSUInteger bytesPerRow = driver->GetBufferPitch();
+    NSUInteger bytesPerRow = driver->GetBufferPitch() * sizeof(uint32_t);
     
     MTLRegion region = MTLRegionMake2D(0, 0, width, height);
     
@@ -360,6 +374,8 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         [renderEncoder endEncoding];
         [commandBuffer presentDrawable:view.currentDrawable];
+    } else {
+        if (drawCount <= 5) NSLog(@"OTTD_MetalView drawInMTKView: no passDescriptor!");
     }
     
     [commandBuffer commit];

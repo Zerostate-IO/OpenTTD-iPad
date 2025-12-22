@@ -121,10 +121,21 @@ set(CMAKE_THREAD_PREFER_PTHREAD YES)
 # Make sure we have Threads available.
 find_package(Threads REQUIRED)
 
-find_package(ZLIB)
-find_package(LibLZMA)
-find_package(LZO)
-find_package(PNG)
+# For iOS, skip find_package for system libraries to avoid baking device SDK paths.
+# iOS system libraries (zlib, etc.) are linked via -l flags to let Xcode resolve
+# the correct library based on the target SDK (device vs simulator).
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    find_package(ZLIB)
+    find_package(LibLZMA)
+    find_package(LZO)
+    find_package(PNG)
+else()
+    # Mark these as "found" for iOS so link_package works, but we'll link differently
+    set(ZLIB_FOUND ON)
+    set(LIBLZMA_FOUND OFF)  # Not critical, skip for now
+    set(LZO_FOUND OFF)      # Not critical, skip for now  
+    set(PNG_FOUND OFF)      # Not critical, skip for now
+endif()
 
 if(WIN32 OR EMSCRIPTEN)
     # Windows uses WinHttp for HTTP requests.
@@ -160,7 +171,13 @@ endif()
 if(APPLE)
     enable_language(OBJCXX)
 
-    find_package(Iconv)
+    # Skip Iconv find_package on iOS - libiconv.tbd has device SDK path issues
+    # iOS has iconv built-in, we'll link via -liconv instead
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        find_package(Iconv)
+    else()
+        set(Iconv_FOUND ON)  # Mark as found, we'll link differently
+    endif()
 
     find_library(AUDIOTOOLBOX_LIBRARY AudioToolbox)
     find_library(AUDIOUNIT_LIBRARY AudioUnit)
@@ -344,15 +361,21 @@ if(IOS_BUILD)
         # Minimum iOS version
         XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}"
 
-        # Code signing configuration for local development
-        # Empty DEVELOPMENT_TEAM allows ad-hoc/unsigned local builds
-        # Set to your Team ID for device deployment: cmake -DIOS_DEVELOPMENT_TEAM="XXXXXXXXXX"
-        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Apple Development"
-        XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
-        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${IOS_DEVELOPMENT_TEAM}"
+        # Support both device and simulator builds
+        # This allows Xcode to select the correct SDK based on destination
+        XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphoneos iphonesimulator"
 
-        # Entitlements file for capabilities
-        XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_SOURCE_DIR}/os/ios/openttd.entitlements"
+        # Only build active architecture for faster debug builds
+        # Release builds will build all required architectures
+        XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH "$<$<CONFIG:Debug>:YES>"
+
+        # Code signing configuration for local development
+        # For simulator builds: no signing required
+        # For device builds: set your Team ID: cmake -DIOS_DEVELOPMENT_TEAM="XXXXXXXXXX"
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${IOS_DEVELOPMENT_TEAM}"
 
         # Product name
         XCODE_ATTRIBUTE_PRODUCT_NAME "OpenTTD"
@@ -418,6 +441,15 @@ endif()
 include(Catch)
 catch_discover_tests(openttd_test)
 
+# iOS code signing for test target (disable for simulator builds)
+if(IOS_BUILD)
+    set_target_properties(openttd_test PROPERTIES
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+    )
+endif()
+
 if(HAIKU)
     target_link_libraries(openttd_lib "be" "network" "midi")
 endif()
@@ -431,9 +463,18 @@ set_target_properties(openttd PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_
 
 include(LinkPackage)
 link_package(PNG TARGET PNG::PNG ENCOURAGED)
-link_package(ZLIB TARGET ZLIB::ZLIB ENCOURAGED)
-link_package(LIBLZMA TARGET LibLZMA::LibLZMA ENCOURAGED)
-link_package(LZO)
+
+# iOS: Link system libraries via -l flags to avoid SDK path issues (device vs simulator)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # zlib is always available on iOS - link via flag, not absolute path
+    target_link_libraries(openttd_lib "-lz")
+    add_definitions(-DWITH_ZLIB)
+    message(STATUS "ZLIB found -- -DWITH_ZLIB -- (iOS system library via -lz)")
+else()
+    link_package(ZLIB TARGET ZLIB::ZLIB ENCOURAGED)
+    link_package(LIBLZMA TARGET LibLZMA::LibLZMA ENCOURAGED)
+    link_package(LZO)
+endif()
 
 if(NOT WIN32 AND NOT EMSCRIPTEN)
     link_package(CURL ENCOURAGED)
@@ -469,26 +510,32 @@ endif()
 include(3rdparty/llvm/CheckAtomic)
 
 if(APPLE)
-    link_package(Iconv TARGET Iconv::Iconv)
-
     if(IOS_BUILD)
-        # iOS-specific libraries
+        # iOS: Link iconv via flag to avoid SDK path issues
+        target_link_libraries(openttd_lib "-liconv")
+        add_definitions(-DWITH_ICONV)
+        message(STATUS "Iconv found -- -DWITH_ICONV -- (iOS system library via -liconv)")
+
+        # iOS-specific framework libraries
+        # Use -framework flag instead of absolute paths to ensure Xcode
+        # resolves the correct framework for device vs simulator builds
         target_link_libraries(openttd_lib
-            ${AUDIOTOOLBOX_LIBRARY}
-            ${QUARTZCORE_LIBRARY}
-            ${CORETEXT_LIBRARY}
-            ${UIKIT_LIBRARY}
-            ${METAL_LIBRARY}
-            ${METALKIT_LIBRARY}
+            "-framework AudioToolbox"
+            "-framework QuartzCore"
+            "-framework CoreText"
+            "-framework CoreGraphics"
+            "-framework Foundation"
+            "-framework UIKit"
+            "-framework Metal"
+            "-framework MetalKit"
+            "-framework AVFoundation"
         )
-        if(AVFOUNDATION_LIBRARY)
-            target_link_libraries(openttd_lib ${AVFOUNDATION_LIBRARY})
-        endif()
 
         add_definitions(
             -DWITH_IOS
         )
     else()
+        link_package(Iconv TARGET Iconv::Iconv)
         # macOS-specific libraries
         target_link_libraries(openttd_lib
             ${AUDIOTOOLBOX_LIBRARY}
@@ -607,6 +654,30 @@ endif()
 enable_testing()
 
 add_subdirectory(regression)
+
+# iOS: Copy resources to app bundle after build
+# MACOSX_PACKAGE_LOCATION doesn't work reliably for generated files with Xcode,
+# so we use a post-build command instead.
+if(IOS_BUILD)
+    add_custom_command(TARGET openttd POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/lang"
+            "$<TARGET_BUNDLE_DIR:openttd>/lang"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/baseset"
+            "$<TARGET_BUNDLE_DIR:openttd>/baseset"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_SOURCE_DIR}/media/baseset/opengfx-7.1.tar"
+            "$<TARGET_BUNDLE_DIR:openttd>/baseset/opengfx-7.1.tar"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/ai"
+            "$<TARGET_BUNDLE_DIR:openttd>/ai"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/game"
+            "$<TARGET_BUNDLE_DIR:openttd>/game"
+        COMMENT "Copying resources to iOS app bundle"
+    )
+endif()
 
 if(APPLE OR WIN32)
     find_package(Pandoc)

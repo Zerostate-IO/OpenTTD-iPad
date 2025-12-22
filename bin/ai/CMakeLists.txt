@@ -41,3 +41,12 @@ add_custom_target(ai_compat_files
 add_dependencies(openttd
     ai_compat_files
 )
+
+if(IOS_BUILD)
+    target_sources(openttd PRIVATE ${AI_COMPAT_BINARY_FILES})
+    set_source_files_properties(${AI_COMPAT_BINARY_FILES}
+            PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources/ai
+            GENERATED TRUE
+    )
+endif()

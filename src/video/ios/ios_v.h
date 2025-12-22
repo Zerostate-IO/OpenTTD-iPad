@@ -34,6 +34,7 @@ class VideoDriver_iOS : public VideoDriver {
 private:
 	Dimension orig_res;       ///< Saved window size.
 	bool refresh_sys_sprites; ///< System sprites need refreshing.
+	std::atomic<bool> ready_for_tick{false};
 
 public:
 	bool setup; ///< Window is currently being created.
@@ -86,8 +87,11 @@ public:
 	/** Called when the drawable size changes. */
 	void GameSizeChanged();
 
+	/** Check if driver is ready to process ticks. */
+	bool IsReadyForTick() const { return this->ready_for_tick.load(); }
+
 	/** Wrapper to call Tick() from Objective-C code. */
-	void TickWrapper() { this->Tick(); }
+	void TickWrapper() { if (this->ready_for_tick.load()) this->Tick(); }
 
 	/** Get a pointer to the buffer for display (always 32bpp RGBA/BGRA). */
 	virtual void *GetDisplayBuffer() = 0;
@@ -117,6 +121,7 @@ private:
 	int buffer_depth;     ///< Colour depth of used frame buffer
 	std::unique_ptr<uint8_t[]> pixel_buffer; ///< used for direct pixel access
 	std::unique_ptr<uint32_t[]> window_buffer; ///< Colour translation from palette to screen
+	std::unique_ptr<uint8_t[]> anim_buffer; ///< Animation buffer for 32bpp animated blitter
 
 	int window_width;     ///< Current window width in pixel
 	int window_height;    ///< Current window height in pixel
@@ -137,6 +142,9 @@ public:
 	std::string_view GetName() const override { return "ios"; }
 
 	void AllocateBackingStore(bool force = false) override;
+
+	bool HasAnimBuffer() override { return true; }
+	uint8_t *GetAnimBuffer() override { return this->anim_buffer.get(); }
 
 protected:
 	void Paint() override;

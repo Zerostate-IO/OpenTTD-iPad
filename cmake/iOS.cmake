@@ -12,8 +12,11 @@ set(CMAKE_SYSTEM_NAME iOS)
 # Note: CMake uses iOS SDK version numbers. iPadOS 26.2 uses iOS SDK 17+
 set(CMAKE_OSX_DEPLOYMENT_TARGET "17.0" CACHE STRING "Minimum iOS version")
 
-# Build for arm64 only (all modern iPads)
-set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Build for arm64")
+# IMPORTANT: Do NOT set CMAKE_OSX_ARCHITECTURES or CMAKE_OSX_SYSROOT here!
+# Xcode needs to control these based on the selected destination (device vs simulator).
+# - Device builds use arm64 with iphoneos SDK
+# - Simulator builds use arm64 (Apple Silicon) or x86_64 (Intel) with iphonesimulator SDK
+# Setting them here causes SDK mismatch errors when building for simulator.
 
 # Mark this as an iOS build for conditional CMake logic
 set(IOS_BUILD ON CACHE BOOL "Building for iOS/iPadOS")
@@ -30,4 +33,4 @@ set(OPTION_INSTALL_FHS OFF CACHE BOOL "" FORCE)
 message(STATUS "iOS Build Configuration:")
 message(STATUS "  CMAKE_SYSTEM_NAME: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "  CMAKE_OSX_DEPLOYMENT_TARGET: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
-message(STATUS "  CMAKE_OSX_ARCHITECTURES: ${CMAKE_OSX_ARCHITECTURES}")
+message(STATUS "  Note: Architecture and SDK controlled by Xcode destination")

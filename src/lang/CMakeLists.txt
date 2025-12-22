@@ -138,3 +138,12 @@ add_dependencies(languages
         table_strings
 )
 add_library(openttd::languages ALIAS languages)
+
+if(IOS_BUILD)
+    target_sources(openttd PRIVATE ${LANG_BINARY_FILES})
+    set_source_files_properties(${LANG_BINARY_FILES}
+            PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources/lang
+            GENERATED TRUE
+    )
+endif()

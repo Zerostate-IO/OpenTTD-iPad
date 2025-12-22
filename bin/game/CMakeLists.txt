@@ -38,3 +38,12 @@ add_custom_target(gs_compat_files
 add_dependencies(openttd
     gs_compat_files
 )
+
+if(IOS_BUILD)
+    target_sources(openttd PRIVATE ${GS_COMPAT_BINARY_FILES})
+    set_source_files_properties(${GS_COMPAT_BINARY_FILES}
+            PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources/game
+            GENERATED TRUE
+    )
+endif()
