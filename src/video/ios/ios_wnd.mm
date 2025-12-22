@@ -62,8 +62,10 @@
 {
 	if (!driver) return;
 	for (UITouch *touch in touches) {
-		CGPoint loc = [ touch locationInView:self.view ];
-		driver->HandleTouchBegan(loc.x, loc.y, (long)touch);
+        if (touch.type == UITouchTypePencil) {
+		    CGPoint loc = [ touch locationInView:self.view ];
+		    driver->HandleTouchBegan(loc.x, loc.y, (long)touch);
+        }
 	}
 }
 
@@ -71,8 +73,10 @@
 {
 	if (!driver) return;
 	for (UITouch *touch in touches) {
-		CGPoint loc = [ touch locationInView:self.view ];
-		driver->HandleTouchMoved(loc.x, loc.y, (long)touch);
+        if (touch.type == UITouchTypePencil) {
+		    CGPoint loc = [ touch locationInView:self.view ];
+		    driver->HandleTouchMoved(loc.x, loc.y, (long)touch);
+        }
 	}
 }
 
@@ -80,8 +84,10 @@
 {
 	if (!driver) return;
 	for (UITouch *touch in touches) {
-		CGPoint loc = [ touch locationInView:self.view ];
-		driver->HandleTouchEnded(loc.x, loc.y, (long)touch);
+        if (touch.type == UITouchTypePencil) {
+		    CGPoint loc = [ touch locationInView:self.view ];
+		    driver->HandleTouchEnded(loc.x, loc.y, (long)touch);
+        }
 	}
 }
 
@@ -132,10 +138,11 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 }
 )";
 
-@interface OTTD_MetalView () <MTKViewDelegate>
+@interface OTTD_MetalView () <MTKViewDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, strong) id<MTLCommandQueue> commandQueue;
 @property (nonatomic, strong) id<MTLRenderPipelineState> pipelineState;
 @property (nonatomic, strong) id<MTLTexture> gameTexture;
+@property (nonatomic, assign) float accumulatedPinchScale;
 @end
 
 @implementation OTTD_MetalView {
@@ -160,6 +167,7 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 
         [self setupPipeline:device];
         [self setupBuffers:device];
+        [self setupGestureRecognizers];
 	}
 	return self;
 }
@@ -203,6 +211,114 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 
     vertexBuffer = [device newBufferWithBytes:positions length:sizeof(positions) options:MTLResourceStorageModeShared];
     texCoordBuffer = [device newBufferWithBytes:texCoords length:sizeof(texCoords) options:MTLResourceStorageModeShared];
+}
+
+- (void)setupGestureRecognizers {
+    // Single tap
+    UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] 
+        initWithTarget:self action:@selector(handleSingleTap:)];
+    singleTap.numberOfTapsRequired = 1;
+    singleTap.numberOfTouchesRequired = 1;
+    singleTap.delegate = self;
+    singleTap.cancelsTouchesInView = NO;
+
+    // Two-finger tap (right-click)
+    UITapGestureRecognizer *twoFingerTap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(handleTwoFingerTap:)];
+    twoFingerTap.numberOfTouchesRequired = 2;
+    twoFingerTap.delegate = self;
+    twoFingerTap.cancelsTouchesInView = NO;
+
+    // Long press (right-click, 500ms)
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(handleLongPress:)];
+    longPress.minimumPressDuration = 0.5;
+    longPress.allowableMovement = 15;
+    longPress.delegate = self;
+    longPress.cancelsTouchesInView = NO;
+
+    // Pan (viewport scroll, single finger only)
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(handlePan:)];
+    pan.minimumNumberOfTouches = 1;
+    pan.maximumNumberOfTouches = 1;
+    pan.delegate = self;
+    pan.cancelsTouchesInView = NO;
+
+    // Pinch (zoom)
+    UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc]
+        initWithTarget:self action:@selector(handlePinch:)];
+    pinch.delegate = self;
+    pinch.cancelsTouchesInView = NO;
+
+    // DEPENDENCY CHAINS
+    [singleTap requireGestureRecognizerToFail:longPress];
+    [singleTap requireGestureRecognizerToFail:pan];
+    
+    [self addGestureRecognizer:singleTap];
+    [self addGestureRecognizer:twoFingerTap];
+    [self addGestureRecognizer:longPress];
+    [self addGestureRecognizer:pan];
+    [self addGestureRecognizer:pinch];
+}
+
+- (void)handleSingleTap:(UITapGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateEnded) {
+        CGPoint loc = [gesture locationInView:self];
+        if (driver) driver->HandleTap(loc.x, loc.y);
+    }
+}
+
+- (void)handleTwoFingerTap:(UITapGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateEnded) {
+        CGPoint loc = [gesture locationInView:self];
+        if (driver) driver->HandleRightClick(loc.x, loc.y);
+    }
+}
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        // Haptic feedback
+        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [feedback impactOccurred];
+        
+        CGPoint loc = [gesture locationInView:self];
+        if (driver) driver->HandleRightClick(loc.x, loc.y);
+    }
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateChanged) {
+        CGPoint translation = [gesture translationInView:self];
+        if (driver) driver->HandlePan(translation.x, translation.y);
+        [gesture setTranslation:CGPointZero inView:self];
+    }
+}
+
+- (void)handlePinch:(UIPinchGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        self.accumulatedPinchScale = 1.0f;
+    } else if (gesture.state == UIGestureRecognizerStateChanged) {
+        self.accumulatedPinchScale *= gesture.scale;
+        gesture.scale = 1.0f;
+        
+        if (self.accumulatedPinchScale > 1.5f) {
+            if (driver) driver->HandleZoomIn();
+            self.accumulatedPinchScale = 1.0f;
+        } else if (self.accumulatedPinchScale < 0.67f) {
+            if (driver) driver->HandleZoomOut();
+            self.accumulatedPinchScale = 1.0f;
+        }
+    }
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g1 shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)g2 {
+    // Allow pan + pinch
+    if (([g1 isKindOfClass:[UIPanGestureRecognizer class]] && [g2 isKindOfClass:[UIPinchGestureRecognizer class]]) ||
+        ([g1 isKindOfClass:[UIPinchGestureRecognizer class]] && [g2 isKindOfClass:[UIPanGestureRecognizer class]])) {
+        return YES;
+    }
+    return NO;
 }
 
 - (void)drawInMTKView:(MTKView *)view {

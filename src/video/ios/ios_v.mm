@@ -110,6 +110,36 @@ bool VideoDriver_iOS::ToggleFullscreen(bool fullscreen)
 	return true;
 }
 
+void VideoDriver_iOS::ToggleVsync(bool vsync)
+{
+    if (!this->displayLink) return;
+    
+    if (vsync) {
+        // Normal vsync - respect thermal state for frame rate
+        NSProcessInfoThermalState state = [[NSProcessInfo processInfo] thermalState];
+        if (state == NSProcessInfoThermalStateSerious || state == NSProcessInfoThermalStateCritical) {
+            if (@available(iOS 15.0, *)) {
+                this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
+            } else {
+                this->displayLink.preferredFramesPerSecond = 30;
+            }
+        } else {
+            if (@available(iOS 15.0, *)) {
+                this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(60, 120, 120);
+            } else {
+                this->displayLink.preferredFramesPerSecond = 60;
+            }
+        }
+    } else {
+        // No vsync - run as fast as possible (still limited by display)
+        if (@available(iOS 15.0, *)) {
+            this->displayLink.preferredFrameRateRange = CAFrameRateRangeMake(120, 120, 120);
+        } else {
+            this->displayLink.preferredFramesPerSecond = 120;
+        }
+    }
+}
+
 void VideoDriver_iOS::ClearSystemSprites()
 {
 	this->refresh_sys_sprites = true;
@@ -213,7 +243,9 @@ Dimension VideoDriver_iOS::GetScreenSize() const
 
 void VideoDriver_iOS::InputLoop()
 {
-	// Handle input processing if needed
+    // On iOS, modifier key state is tracked per-event in UIKit
+    // External keyboard support would require UIKeyCommand handlers
+    // For now, fast forward can be triggered via toolbar or gestures
 }
 
 bool VideoDriver_iOS::LockVideoBuffer()
@@ -269,6 +301,48 @@ void VideoDriver_iOS::HandleTouchMoved(float x, float y, int touch_id)
 void VideoDriver_iOS::HandleTouchEnded(float x, float y, int touch_id)
 {
 	_left_button_down = false;
+}
+
+void VideoDriver_iOS::HandleTap(float x, float y)
+{
+    float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+    _cursor.pos.x = static_cast<int>(x * scale);
+    _cursor.pos.y = static_cast<int>(y * scale);
+    _left_button_down = true;
+    _left_button_clicked = true;
+    HandleMouseEvents();
+    _left_button_down = false;
+}
+
+void VideoDriver_iOS::HandleRightClick(float x, float y)
+{
+    float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+    _cursor.pos.x = static_cast<int>(x * scale);
+    _cursor.pos.y = static_cast<int>(y * scale);
+    _right_button_down = true;
+    _right_button_clicked = true;
+    HandleMouseEvents();
+    _right_button_down = false;
+}
+
+void VideoDriver_iOS::HandlePan(float dx, float dy)
+{
+    float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+    _cursor.h_wheel -= dx * scale;
+    _cursor.v_wheel -= dy * scale;
+    _cursor.wheel_moved = true;
+}
+
+void VideoDriver_iOS::HandleZoomIn()
+{
+    _cursor.wheel--;
+    HandleMouseEvents();
+}
+
+void VideoDriver_iOS::HandleZoomOut()
+{
+    _cursor.wheel++;
+    HandleMouseEvents();
 }
 
 // --------------------------------------------------------------------------------
@@ -377,7 +451,7 @@ void VideoDriver_iOSMetal::UpdatePalette(uint first_colour, uint num_colours)
     
     for (uint i = 0; i < num_colours; i++) {
         uint c = first_colour + i;
-        const Colour &col = _cur_palette[c];
+        const Colour &col = _cur_palette.palette[c];
         // BGRA format: Alpha | Red | Green | Blue (Little Endian -> B G R A)
         // Metal BGRA8Unorm means 0th byte is Blue.
         // uint32 = 0xAARRGGBB.

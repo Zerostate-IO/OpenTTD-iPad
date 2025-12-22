@@ -54,6 +54,7 @@ public:
 
 	bool ChangeResolution(int w, int h) override;
 	bool ToggleFullscreen(bool fullscreen) override;
+	void ToggleVsync(bool vsync) override;
 
 	void ClearSystemSprites() override;
 	void PopulateSystemSprites() override;
@@ -74,6 +75,13 @@ public:
 	void HandleTouchBegan(float x, float y, int touch_id);
 	void HandleTouchMoved(float x, float y, int touch_id);
 	void HandleTouchEnded(float x, float y, int touch_id);
+
+    // Gesture handling
+    void HandleTap(float x, float y);
+    void HandleRightClick(float x, float y);
+    void HandlePan(float dx, float dy);
+    void HandleZoomIn();
+    void HandleZoomOut();
 
 	/** Called when the drawable size changes. */
 	void GameSizeChanged();
