@@ -206,6 +206,116 @@ cmake --build build-ios --config Debug
 rm -rf build-ios && cmake -G Xcode -DCMAKE_SYSTEM_NAME=iOS -B build-ios
 ```
 
+## Game Assets Setup
+
+The OpenTTD iPad port requires OpenGFX graphics files to display properly. These files are gitignored (see `media/baseset/opengfx-*.tar` in `.gitignore`) and must be downloaded manually as they cannot be bundled due to licensing.
+
+### Why Assets Are Required
+
+OpenTTD is open-source, but the original Transport Tycoon Deluxe graphics are copyrighted. The community created open-source replacements:
+- **OpenGFX** - Graphics (required)
+- **OpenSFX** - Sound effects (optional)
+- **OpenMSX** - Music (optional)
+
+Without OpenGFX, the game will show a "missing baseset" error on launch.
+
+### Downloading OpenGFX (Required)
+
+**Option 1: Quick Setup Script**
+```bash
+# From the project root directory
+cd /Users/velazcod/Development/OpenTTD-iPad
+
+# Download and extract OpenGFX
+curl -L "https://cdn.openttd.org/opengfx-releases/7.1/opengfx-7.1-all.zip" -o /tmp/opengfx.zip
+unzip -o /tmp/opengfx.zip -d media/baseset/
+rm /tmp/opengfx.zip
+
+# Verify the file exists
+ls -la media/baseset/opengfx-7.1.tar
+```
+
+**Option 2: Manual Download**
+1. Visit: https://www.openttd.org/downloads/opengfx-releases/latest
+2. Download the `.zip` file (e.g., `opengfx-7.1-all.zip`)
+3. Extract the `.zip` - it contains a `.tar` file inside
+4. Place the `.tar` file (e.g., `opengfx-7.1.tar`) in `media/baseset/`
+
+**Expected Result:**
+```
+media/baseset/
+├── opengfx-7.1.tar    ← This file must exist
+├── orig_dos.obg
+├── orig_dos_de.obg
+├── orig_win.obg
+└── ... (other .obg files)
+```
+
+### Downloading Optional Assets
+
+**OpenSFX (Sound Effects)**
+```bash
+curl -L "https://cdn.openttd.org/opensfx-releases/1.0.3/opensfx-1.0.3-all.zip" -o /tmp/opensfx.zip
+unzip -o /tmp/opensfx.zip -d media/baseset/
+rm /tmp/opensfx.zip
+```
+
+**OpenMSX (Music)**
+```bash
+curl -L "https://cdn.openttd.org/openmsx-releases/0.4.2/openmsx-0.4.2-all.zip" -o /tmp/openmsx.zip
+unzip -o /tmp/openmsx.zip -d media/baseset/
+rm /tmp/openmsx.zip
+```
+
+### Verifying Assets Are Installed
+
+Run this command to check all assets:
+```bash
+ls -la media/baseset/*.tar 2>/dev/null || echo "No .tar files found - assets not installed!"
+```
+
+Expected output (if all installed):
+```
+media/baseset/opengfx-7.1.tar
+media/baseset/opensfx-1.0.3.tar
+media/baseset/openmsx-0.4.2.tar
+```
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "Missing baseset" error on launch | Download OpenGFX as described above |
+| Downloaded .zip but game doesn't see it | Extract the .zip - place the .tar file inside, not the .zip |
+| Wrong version error | Check CMakeLists.txt lines 670-671 for expected version |
+| Assets downloaded but still errors | Ensure files are in `media/baseset/`, not a subdirectory |
+
+### Version Updates
+
+Current versions used in this project:
+- **OpenGFX**: 7.1
+- **OpenSFX**: 1.0.3
+- **OpenMSX**: 0.4.2
+
+If versions change, update:
+1. The download URLs above
+2. `CMakeLists.txt` (lines 670-671) for OpenGFX version reference
+
+### One-Liner Setup (All Assets)
+
+Copy and run this entire block to download all assets at once:
+```bash
+cd /Users/velazcod/Development/OpenTTD-iPad && \
+curl -L "https://cdn.openttd.org/opengfx-releases/7.1/opengfx-7.1-all.zip" -o /tmp/opengfx.zip && \
+curl -L "https://cdn.openttd.org/opensfx-releases/1.0.3/opensfx-1.0.3-all.zip" -o /tmp/opensfx.zip && \
+curl -L "https://cdn.openttd.org/openmsx-releases/0.4.2/openmsx-0.4.2-all.zip" -o /tmp/openmsx.zip && \
+unzip -o /tmp/opengfx.zip -d media/baseset/ && \
+unzip -o /tmp/opensfx.zip -d media/baseset/ && \
+unzip -o /tmp/openmsx.zip -d media/baseset/ && \
+rm /tmp/open*.zip && \
+echo "✅ All assets installed:" && ls media/baseset/*.tar
+```
+
 ## Questions to Ask
 
 If uncertain about implementation:

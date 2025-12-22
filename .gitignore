@@ -24,3 +24,9 @@ Pods/
 # AI Stuff
 opencode.jsonc
 .taskmaster/
+
+# Downloaded assets
+media/baseset/opengfx-*.tar
+media/baseset/opengfx-*.zip
+*.zip
+*.tar
