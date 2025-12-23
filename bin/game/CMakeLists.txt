@@ -40,10 +40,9 @@ add_dependencies(openttd
 )
 
 if(IOS_BUILD)
-    set_source_files_properties(${GS_COMPAT_BINARY_FILES}
+    target_sources(openttd PRIVATE ${GS_COMPAT_SOURCE_FILES})
+    set_source_files_properties(${GS_COMPAT_SOURCE_FILES}
             PROPERTIES
             MACOSX_PACKAGE_LOCATION Resources/game
-            GENERATED TRUE
     )
-    # target_sources(openttd PRIVATE ${GS_COMPAT_BINARY_FILES})
 endif()
