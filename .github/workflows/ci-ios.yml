@@ -29,7 +29,21 @@ jobs:
     - name: Install GCC problem matcher
       uses: ammaraskar/gcc-problem-matcher@master
 
-    - name: Build
+    - name: Build (host tools)
+      run: |
+        mkdir build-host
+        cd build-host
+
+        echo "::group::CMake (host tools)"
+        cmake .. -DOPTION_TOOLS_ONLY=ON
+        echo "::endgroup::"
+
+        echo "::group::Build (host tools)"
+        echo "Running on $(sysctl -n hw.logicalcpu) cores"
+        cmake --build . -j $(sysctl -n hw.logicalcpu) --target tools
+        echo "::endgroup::"
+
+    - name: Build (iOS)
       run: |
         mkdir build
         cd build
@@ -42,6 +56,7 @@ jobs:
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
           -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+          -DHOST_BINARY_DIR=../build-host \
           ${{ inputs.extra-cmake-parameters }} \
           # EOF
         echo "::endgroup::"
