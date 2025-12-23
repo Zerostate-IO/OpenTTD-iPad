@@ -63,7 +63,8 @@ jobs:
 
         echo "::group::Build"
         echo "Running on $(sysctl -n hw.logicalcpu) cores"
-        cmake --build . --config ${{ inputs.build_type }} -- -jobs $(sysctl -n hw.logicalcpu)
+        # Build only the openttd target - tests can't run on iOS in CI
+        cmake --build . --config ${{ inputs.build_type }} --target openttd -- -jobs $(sysctl -n hw.logicalcpu)
         echo "::endgroup::"
 
     # Note: iOS tests are skipped as they require either:
