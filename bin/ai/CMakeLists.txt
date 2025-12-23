@@ -43,10 +43,10 @@ add_dependencies(openttd
 )
 
 if(IOS_BUILD)
-    target_sources(openttd PRIVATE ${AI_COMPAT_BINARY_FILES})
     set_source_files_properties(${AI_COMPAT_BINARY_FILES}
             PROPERTIES
             MACOSX_PACKAGE_LOCATION Resources/ai
             GENERATED TRUE
     )
+    # target_sources(openttd PRIVATE ${AI_COMPAT_BINARY_FILES})
 endif()

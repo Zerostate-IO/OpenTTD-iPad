@@ -16,6 +16,10 @@
 #include "../../3rdparty/fmt/format.h"
 #include "ios.h"
 #include "../../safeguards.h"
+#include "../../saveload/saveload.h"
+#include "../../command_func.h"
+#include "../../misc_cmd.h"
+#include "../../network/network.h"
 
 #import <UIKit/UIKit.h>
 #include <thread>
@@ -233,6 +237,9 @@ void CocoaReleaseAutoreleasePool()
 
 - (void)sceneWillResignActive:(UIScene *)scene {
 	// Called when scene moves from active to inactive state
+	if (_game_mode == GM_NORMAL) {
+		Command<CMD_PAUSE>::Post(PauseMode::Normal, true);
+	}
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
@@ -241,6 +248,9 @@ void CocoaReleaseAutoreleasePool()
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
 	// Called as scene transitions from foreground to background
+	if (_game_mode == GM_NORMAL) {
+		DoExitSave();
+	}
 }
 
 @end

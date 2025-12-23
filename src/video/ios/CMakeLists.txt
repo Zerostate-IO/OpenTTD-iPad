@@ -5,6 +5,8 @@
 # Only compiled when building for iOS (CMAKE_SYSTEM_NAME = iOS)
 
 add_files(
+    ios_touch.h
+    ios_touch.mm
     ios_v.h
     ios_v.mm
     ios_wnd.h

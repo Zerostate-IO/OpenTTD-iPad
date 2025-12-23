@@ -120,6 +120,20 @@
 	return YES;
 }
 
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations
+{
+	return UIInterfaceOrientationMaskLandscape;
+}
+
+- (void)viewSafeAreaInsetsDidChange
+{
+	[super viewSafeAreaInsetsDidChange];
+	if (driver) {
+		UIEdgeInsets insets = self.view.safeAreaInsets;
+		driver->SetSafeAreaInsets(insets.top, insets.bottom, insets.left, insets.right);
+	}
+}
+
 @end
 
 
@@ -259,6 +273,10 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     twoFingerPan.maximumNumberOfTouches = 2;
     twoFingerPan.delegate = self;
     twoFingerPan.cancelsTouchesInView = NO;
+
+    // Resolve gesture conflicts
+    // Two-finger tap should wait for pinch to ensure it's not a zoom
+    [twoFingerTap requireGestureRecognizerToFail:pinch];
 
     [self addGestureRecognizer:twoFingerTap];
     [self addGestureRecognizer:longPress];

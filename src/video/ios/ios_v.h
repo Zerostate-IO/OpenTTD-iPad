@@ -41,7 +41,7 @@ private:
 	float touch_start_x;
 	float touch_start_y;
 	uintptr_t active_touch_id;
-	static constexpr float DRAG_THRESHOLD = 10.0f; // points
+	static constexpr float DRAG_THRESHOLD = 15.0f; // points
 
 public:
 	bool setup; ///< Window is currently being created.
@@ -50,6 +50,8 @@ public:
 	OTTD_iOSViewController *viewController; ///< Pointer to view controller
 	OTTD_MetalView *metalView;           ///< Pointer to Metal view
 	CADisplayLink *displayLink;
+
+	Rect safe_area; ///< Safe area insets (top, left, bottom, right)
 
 public:
 	VideoDriver_iOS(bool uses_hardware_acceleration = false);
@@ -72,6 +74,8 @@ public:
 	std::vector<int> GetListOfMonitorRefreshRates() override;
 
 	int GetBufferPitch() const { return _screen.pitch; }
+	
+	void SetSafeAreaInsets(float top, float bottom, float left, float right);
 
 	/* --- The following methods should be private, but can't be due to Obj-C limitations. --- */
 

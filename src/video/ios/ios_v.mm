@@ -552,6 +552,21 @@ void VideoDriver_iOS::HandleZoomOut()
     }
 }
 
+void VideoDriver_iOS::SetSafeAreaInsets(float top, float bottom, float left, float right)
+{
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	this->safe_area = {
+		(int)(left * scale),
+		(int)(top * scale),
+		(int)(right * scale),
+		(int)(bottom * scale)
+	};
+	
+	NSLog(@"VideoDriver_iOS::SetSafeAreaInsets: %.1f, %.1f, %.1f, %.1f (scaled: %d, %d, %d, %d)", 
+		  top, bottom, left, right, 
+		  this->safe_area.left, this->safe_area.top, this->safe_area.right, this->safe_area.bottom);
+}
+
 // --------------------------------------------------------------------------------
 // VideoDriver_iOSMetal Implementation
 // --------------------------------------------------------------------------------
