@@ -79,7 +79,7 @@
 	for (UITouch *touch in touches) {
 		CGPoint loc = [ touch locationInView:self.view ];
 		NSLog(@"touchesBegan: loc=(%.1f, %.1f), scale=%.1f", loc.x, loc.y, self.view.contentScaleFactor);
-		driver->HandleTouchBegan(loc.x, loc.y, (long)touch);
+		driver->HandleTouchBegan(loc.x, loc.y, (uintptr_t)touch);
 	}
 }
 
@@ -88,7 +88,7 @@
 	if (!driver) return;
 	for (UITouch *touch in touches) {
 		CGPoint loc = [ touch locationInView:self.view ];
-		driver->HandleTouchMoved(loc.x, loc.y, (long)touch);
+		driver->HandleTouchMoved(loc.x, loc.y, (uintptr_t)touch);
 	}
 }
 
@@ -99,7 +99,7 @@
 	for (UITouch *touch in touches) {
 		CGPoint loc = [ touch locationInView:self.view ];
 		NSLog(@"touchesEnded: loc=(%.1f, %.1f)", loc.x, loc.y);
-		driver->HandleTouchEnded(loc.x, loc.y, (long)touch);
+		driver->HandleTouchEnded(loc.x, loc.y, (uintptr_t)touch);
 	}
 }
 

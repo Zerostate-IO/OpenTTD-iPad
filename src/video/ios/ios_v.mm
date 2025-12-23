@@ -26,6 +26,8 @@
 #include "../../window_func.h"
 #include "../../gfx_func.h"
 #include "../../thread.h"
+#include "../../progress.h"
+#include "../../company_func.h"
 
 #include <thread>
 #include <chrono>
@@ -49,6 +51,10 @@ VideoDriver_iOS::VideoDriver_iOS(bool uses_hardware_acceleration)
 	this->metalView = nil;
 	this->displayLink = nil;
 	this->dirty_rect = {};
+	this->touch_is_dragging = false;
+	this->touch_start_x = 0;
+	this->touch_start_y = 0;
+	this->active_touch_id = 0;
 }
 
 void VideoDriver_iOS::Stop()
@@ -392,34 +398,96 @@ bool VideoDriver_iOS::AfterBlitterChange()
 // HandleMouseEvents() then sets _left_button_clicked = true to mark it as processed.
 // We should NOT set _left_button_clicked ourselves - that prevents the click from registering.
 
-void VideoDriver_iOS::HandleTouchBegan(float x, float y, int touch_id)
+void VideoDriver_iOS::HandleTouchBegan(float x, float y, uintptr_t touch_id)
 {
+	// Ignore multi-touch for single-finger emulation
+	if (this->active_touch_id != 0) return;
+	this->active_touch_id = touch_id;
+
 	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+
+	// Track start position for drag detection
+	this->touch_start_x = x;
+	this->touch_start_y = y;
+	this->touch_is_dragging = false;
+
 	_cursor.pos.x = static_cast<int>(x * scale);
 	_cursor.pos.y = static_cast<int>(y * scale);
 	_left_button_down = true;
 	// Don't set _left_button_clicked - HandleMouseEvents() detects the click
 	// when _left_button_down is true and _left_button_clicked is false
-	HandleMouseEvents();
+	
+	// Guard: only call HandleMouseEvents when game state is ready
+	// (mirrors assertion in window.cpp:2967)
+	if (HasModalProgress() || IsLocalCompany()) {
+		HandleMouseEvents();
+	}
 }
 
-void VideoDriver_iOS::HandleTouchMoved(float x, float y, int touch_id)
+void VideoDriver_iOS::HandleTouchMoved(float x, float y, uintptr_t touch_id)
 {
+	if (touch_id != this->active_touch_id) return;
+
+	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
+	
+	if (!this->touch_is_dragging) {
+		float dx = x - this->touch_start_x;
+		float dy = y - this->touch_start_y;
+		// Use squared distance to avoid sqrt
+		if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) {
+			this->touch_is_dragging = true;
+			
+			// Cancel the click/hold since we're dragging
+			_left_button_down = false;
+			_left_button_clicked = false;
+			// Note: HandleMouseEvents() will process this "Mouse Up" below
+		}
+	}
+
+	if (this->touch_is_dragging) {
+		// Calculate delta from previous processed position
+		// _cursor.pos stores the previous position in pixels
+		float prev_x_points = _cursor.pos.x / scale;
+		float prev_y_points = _cursor.pos.y / scale;
+		
+		float dx = x - prev_x_points;
+		float dy = y - prev_y_points;
+		
+		this->HandlePan(dx, dy);
+	}
+
+	_cursor.pos.x = static_cast<int>(x * scale);
+	_cursor.pos.y = static_cast<int>(y * scale);
+	
+	if (HasModalProgress() || IsLocalCompany()) {
+		HandleMouseEvents();
+	}
+}
+
+void VideoDriver_iOS::HandleTouchEnded(float x, float y, uintptr_t touch_id)
+{
+	if (touch_id != this->active_touch_id) return;
+
 	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
 	_cursor.pos.x = static_cast<int>(x * scale);
 	_cursor.pos.y = static_cast<int>(y * scale);
-	HandleMouseEvents();
-}
 
-void VideoDriver_iOS::HandleTouchEnded(float x, float y, int touch_id)
-{
-	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
-	_cursor.pos.x = static_cast<int>(x * scale);
-	_cursor.pos.y = static_cast<int>(y * scale);
-	// Release the button - this allows a new click to be registered next time
-	_left_button_down = false;
-	_left_button_clicked = false;
-	HandleMouseEvents();
+	if (this->touch_is_dragging) {
+		// Drag ended. The button was already released when drag started.
+		// Just reset the drag state.
+	} else {
+		// This was a tap.
+		// Release the button - this allows a new click to be registered next time
+		_left_button_down = false;
+		_left_button_clicked = false;
+	}
+
+	this->touch_is_dragging = false;
+	this->active_touch_id = 0;
+	
+	if (HasModalProgress() || IsLocalCompany()) {
+		HandleMouseEvents();
+	}
 }
 
 void VideoDriver_iOS::HandleTap(float x, float y)
@@ -428,6 +496,9 @@ void VideoDriver_iOS::HandleTap(float x, float y)
 	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
 	_cursor.pos.x = static_cast<int>(x * scale);
 	_cursor.pos.y = static_cast<int>(y * scale);
+	
+	// Guard: only process when game state is ready
+	if (!HasModalProgress() && !IsLocalCompany()) return;
 	
 	// Mouse down - HandleMouseEvents detects _left_button_down && !_left_button_clicked
 	_left_button_down = true;
@@ -447,6 +518,10 @@ void VideoDriver_iOS::HandleRightClick(float x, float y)
 	float scale = this->metalView ? this->metalView.contentScaleFactor : 1.0f;
 	_cursor.pos.x = static_cast<int>(x * scale);
 	_cursor.pos.y = static_cast<int>(y * scale);
+	
+	// Guard: only process when game state is ready
+	if (!HasModalProgress() && !IsLocalCompany()) return;
+	
 	_right_button_down = true;
 	_right_button_clicked = true;
 	HandleMouseEvents();
@@ -464,13 +539,17 @@ void VideoDriver_iOS::HandlePan(float dx, float dy)
 void VideoDriver_iOS::HandleZoomIn()
 {
     _cursor.wheel--;
-    HandleMouseEvents();
+    if (HasModalProgress() || IsLocalCompany()) {
+        HandleMouseEvents();
+    }
 }
 
 void VideoDriver_iOS::HandleZoomOut()
 {
     _cursor.wheel++;
-    HandleMouseEvents();
+    if (HasModalProgress() || IsLocalCompany()) {
+        HandleMouseEvents();
+    }
 }
 
 // --------------------------------------------------------------------------------

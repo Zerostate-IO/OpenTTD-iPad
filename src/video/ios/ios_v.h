@@ -36,6 +36,13 @@ private:
 	bool refresh_sys_sprites; ///< System sprites need refreshing.
 	std::atomic<bool> ready_for_tick{false};
 
+	// Touch drag detection
+	bool touch_is_dragging;
+	float touch_start_x;
+	float touch_start_y;
+	uintptr_t active_touch_id;
+	static constexpr float DRAG_THRESHOLD = 10.0f; // points
+
 public:
 	bool setup; ///< Window is currently being created.
 
@@ -73,9 +80,9 @@ public:
 	virtual void AllocateBackingStore(bool force = false) = 0;
 
 	// Touch handling
-	void HandleTouchBegan(float x, float y, int touch_id);
-	void HandleTouchMoved(float x, float y, int touch_id);
-	void HandleTouchEnded(float x, float y, int touch_id);
+	void HandleTouchBegan(float x, float y, uintptr_t touch_id);
+	void HandleTouchMoved(float x, float y, uintptr_t touch_id);
+	void HandleTouchEnded(float x, float y, uintptr_t touch_id);
 
     // Gesture handling
     void HandleTap(float x, float y);
