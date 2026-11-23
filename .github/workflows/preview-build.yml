@@ -2,21 +2,16 @@ name: Preview build
 
 on:
   workflow_call:
-    secrets:
-      PREVIEW_CLOUDFLARE_API_TOKEN:
-        description: API token to upload a preview to Cloudflare Pages
-        required: true
-      PREVIEW_CLOUDFLARE_ACCOUNT_ID:
-        description: Account ID to upload a preview to Cloudflare Pages
-        required: true
+
+# Called only from the read-only `pull_request` workflow above. A called
+# workflow cannot gain permissions the caller does not have; no secrets are
+# declared, passed, or referenced here.
+permissions:
+  contents: read
 
 jobs:
   preview:
     name: Build preview
-
-    environment:
-      name: preview
-      url: https://preview.openttd.org/pr${{ github.event.pull_request.number }}/
 
     runs-on: ubuntu-latest
     container:
@@ -102,11 +97,35 @@ jobs:
         # Current emscripten can't install npm>=10.0.0 because node is too old.
         npm install -g npm@9
 
-    - name: Publish preview
-      uses: cloudflare/pages-action@v1
+    # Write identity metadata in OUR step, after contributor code has run.
+    # env: (not shell interpolation) keeps PR-controlled values inert.
+    - name: Write preview metadata
+      env:
+        PREVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+        PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PREVIEW_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: |
+        mkdir -p preview-meta
+        {
+          echo "pr_number=${PREVIEW_PR_NUMBER}"
+          echo "head_sha=${PREVIEW_HEAD_SHA}"
+          echo "head_repo=${PREVIEW_HEAD_REPO}"
+        } > preview-meta/preview-meta.env
+
+    - name: Upload preview build
+      uses: actions/upload-artifact@v4
       with:
-        apiToken: ${{ secrets.PREVIEW_CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.PREVIEW_CLOUDFLARE_ACCOUNT_ID }}
-        projectName: ${{ vars.PREVIEW_CLOUDFLARE_PROJECT_NAME }}
-        directory: public
-        branch: pr${{ github.event.pull_request.number }}
+        name: preview-build
+        path: |
+          public/openttd.data
+          public/openttd.html
+          public/openttd.js
+          public/openttd.wasm
+        if-no-files-found: error
+
+    - name: Upload preview metadata
+      uses: actions/upload-artifact@v4
+      with:
+        name: preview-meta
+        path: preview-meta/preview-meta.env
+        if-no-files-found: error
