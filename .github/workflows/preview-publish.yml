@@ -1,0 +1,107 @@
+name: Publish preview
+
+on:
+  workflow_run:
+    workflows: ['Preview']
+    types: [completed]
+
+# Trusted half. workflow_run executes the copy of this file on the default
+# branch, never the PR head. This workflow never checks out or runs
+# contributor code; it only downloads build output as untrusted DATA.
+permissions:
+  contents: read
+  actions: read        # download artifacts from the triggering run
+  pull-requests: read  # verify PR state, base ref and labels
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify preview run
+    if: >-
+      ${{ github.event.workflow_run.event == 'pull_request'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.name == 'Preview' }}
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.verify.outputs.pr_number }}
+    steps:
+    - name: Download preview metadata
+      uses: actions/download-artifact@v4
+      with:
+        name: preview-meta
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        path: preview-meta
+
+    - name: Verify run and PR identity
+      id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+        WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        WR_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+      run: |
+        set -euo pipefail
+
+        META=preview-meta/preview-meta.env
+        [ -f "$META" ] || { echo "::error::preview metadata artifact missing"; exit 1; }
+
+        # Artifact contents are hostile data: parse, never source.
+        pr_number=$(sed -n 's/^pr_number=//p' "$META")
+        head_sha=$(sed -n 's/^head_sha=//p' "$META")
+        head_repo=$(sed -n 's/^head_repo=//p' "$META")
+
+        [[ "$pr_number" =~ ^[0-9]+$ ]]     || { echo "::error::bad pr_number"; exit 1; }
+        [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad head_sha"; exit 1; }
+
+        # Bind artifact identity to the GitHub-controlled workflow_run event.
+        [ "$head_sha"  = "$WR_HEAD_SHA" ]  || { echo "::error::head_sha mismatch with workflow_run"; exit 1; }
+        [ "$head_repo" = "$WR_HEAD_REPO" ] || { echo "::error::head_repo mismatch with workflow_run"; exit 1; }
+
+        # Cross-check the PR via the API. This also replaces the fork-empty
+        # `workflow_run.pull_requests[]` as the source of the PR number.
+        pr_json=$(gh api "repos/${GH_REPO}/pulls/${pr_number}")
+        api_sha=$(jq -r '.head.sha'           <<< "$pr_json")
+        api_repo=$(jq -r '.head.repo.full_name' <<< "$pr_json")
+        api_state=$(jq -r '.state'            <<< "$pr_json")
+        api_base=$(jq -r '.base.ref'          <<< "$pr_json")
+
+        [ "$api_sha"  = "$WR_HEAD_SHA" ]  || { echo "::error::PR head sha mismatch"; exit 1; }
+        [ "$api_repo" = "$WR_HEAD_REPO" ] || { echo "::error::PR head repo mismatch"; exit 1; }
+        [ "$api_state" = 'open' ]         || { echo "::error::PR is not open"; exit 1; }
+        [[ "$api_base" =~ ^(master|release/.+)$ ]] || { echo "::error::PR base ref not allowed"; exit 1; }
+
+        # Re-check the label here too (fork-safe: read from the API).
+        labels=$(gh api "repos/${GH_REPO}/issues/${pr_number}/labels" --jq '.[].name')
+        grep -qx 'preview' <<< "$labels" || { echo "::error::preview label missing"; exit 1; }
+
+        echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish preview
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: preview
+      url: https://preview.openttd.org/pr${{ needs.verify.outputs.pr_number }}/
+    steps:
+    - name: Download preview build
+      uses: actions/download-artifact@v4
+      with:
+        name: preview-build
+        run-id: ${{ github.event.workflow_run.id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        path: public
+
+    - name: Publish preview
+      uses: cloudflare/pages-action@v1
+      with:
+        apiToken: ${{ secrets.PREVIEW_CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.PREVIEW_CLOUDFLARE_ACCOUNT_ID }}
+        projectName: ${{ vars.PREVIEW_CLOUDFLARE_PROJECT_NAME }}
+        directory: public
+        branch: pr${{ needs.verify.outputs.pr_number }}
